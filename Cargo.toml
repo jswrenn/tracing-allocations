@@ -1,0 +1,16 @@
+[package]
+name = "tracing-allocations"
+version = "0.1.0"
+edition = "2021"
+
+# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
+
+[dependencies]
+tracing = "0.1.31"
+tracing-subscriber = "0.3.9"
+pin-project-lite = "0.2.8"
+backtrace = "0.3"
+
+[dev-dependencies]
+tokio = { version = "1.15", features = ["full", "tracing"] }
+tracing-subscriber = { version = "0.3.9", features = ["fmt"] }
