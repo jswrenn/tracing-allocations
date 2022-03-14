@@ -1,8 +1,8 @@
-use tracing::trace_span;
+use tracing::{trace_span, Instrument};
 use tracing_subscriber::prelude::*;
 
 use std::alloc::System;
-use tracing_allocations::{ignore_allocations, trace_allocations, Instrument, TracingAllocator};
+use tracing_allocations::{ignore_allocations, trace_allocations, TracingAllocator};
 
 #[global_allocator]
 static GLOBAL: TracingAllocator<System> = TracingAllocator::new(System);
@@ -13,7 +13,7 @@ async fn main() {
         .with(tracing_subscriber::fmt::layer())
         .init();
 
-    async {
+    trace_allocations(|| {
         // TRACE foo: tracing_allocations: alloc addr=94253372165520 size=1
         let a = Box::new([0u8; 1]);
 
@@ -34,7 +34,5 @@ async fn main() {
 
         // TRACE foo: tracing_allocations: dealloc addr=94253372165520 size=3
         drop(c);
-    }
-    .instrument(trace_span!("foo"))
-    .await;
+    });
 }

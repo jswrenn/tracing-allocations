@@ -1,201 +1,15 @@
-use core::pin::Pin;
-use core::task::{Context, Poll};
-use core::{future::Future, marker::Sized};
-use pin_project_lite::pin_project;
-use tracing::Span;
-
-/// Attaches spans to a [`std::future::Future`].
-///
-/// Extension trait allowing futures to be
-/// instrumented with a `tracing` [span].
-///
-/// [span]: tracing::Span
-pub trait Instrument: Sized {
-    /// Instruments this type with the provided [`Span`], returning an
-    /// `Instrumented` wrapper.
-    ///
-    /// The attached [`Span`] will be [entered] every time the instrumented
-    /// [`Future`] is polled.
-    ///
-    /// # Examples
-    ///
-    /// Instrumenting a future:
-    ///
-    /// ```rust
-    /// use tracing_allocations::Instrument;
-    ///
-    /// # async fn doc() {
-    /// let my_future = async {
-    ///     // ...
-    /// };
-    ///
-    /// my_future
-    ///     .instrument(tracing::info_span!("my_future"))
-    ///     .await
-    /// # }
-    /// ```
-    ///
-    /// The [`Span::or_current`] combinator can be used in combination with
-    /// `instrument` to ensure that the [current span] is attached to the
-    /// future if the span passed to `instrument` is [disabled]:
-    ///
-    /// ```
-    /// use tracing_allocations::Instrument;
-    /// # mod tokio {
-    /// #     pub(super) fn spawn(_: impl std::future::Future) {}
-    /// # }
-    ///
-    /// let my_future = async {
-    ///     // ...
-    /// };
-    ///
-    /// let outer_span = tracing::info_span!("outer").entered();
-    ///
-    /// // If the "my_future" span is enabled, then the spawned task will
-    /// // be within both "my_future" *and* "outer", since "outer" is
-    /// // "my_future"'s parent. However, if "my_future" is disabled,
-    /// // the spawned task will *not* be in any span.
-    /// tokio::spawn(
-    ///     my_future
-    ///         .instrument(tracing::debug_span!("my_future"))
-    /// );
-    ///
-    /// // Using `Span::or_current` ensures the spawned task is instrumented
-    /// // with the current span, if the new span passed to `instrument` is
-    /// // not enabled. This means that if the "my_future"  span is disabled,
-    /// // the spawned task will still be instrumented with the "outer" span:
-    /// # let my_future = async {};
-    /// tokio::spawn(
-    ///    my_future
-    ///         .instrument(tracing::debug_span!("my_future").or_current())
-    /// );
-    /// ```
-    ///
-    /// [entered]: tracing::Span::enter()
-    /// [`Span::or_current`]: tracing::Span::or_current()
-    /// [current span]: tracing::Span::current()
-    /// [disabled]: tracing::Span::is_disabled()
-    /// [`Future`]: std::future::Future
-    fn instrument(self, span: Span) -> Instrumented<Self> {
-        Instrumented { inner: self, span }
-    }
-
-    /// Instruments this type with the [current] [`Span`], returning an
-    /// `Instrumented` wrapper.
-    ///
-    /// The attached [`Span`] will be [entered] every time the instrumented
-    /// [`Future`] is polled.
-    ///
-    /// This can be used to propagate the current span when spawning a new future.
-    ///
-    /// # Examples
-    ///
-    /// ```rust
-    /// use tracing_allocations::Instrument;
-    ///
-    /// # mod tokio {
-    /// #     pub(super) fn spawn(_: impl std::future::Future) {}
-    /// # }
-    /// # async fn doc() {
-    /// let span = tracing::info_span!("my_span");
-    /// let _enter = span.enter();
-    ///
-    /// // ...
-    ///
-    /// let future = async {
-    ///     tracing::debug!("this event will occur inside `my_span`");
-    ///     // ...
-    /// };
-    /// tokio::spawn(future.in_current_span());
-    /// # }
-    /// ```
-    ///
-    /// [current]: tracing::Span::current()
-    /// [entered]: tracing::Span::enter()
-    /// [`Span`]: tracing::Span
-    /// [`Future`]: std::future::Future
-    #[inline]
-    fn in_current_span(self) -> Instrumented<Self> {
-        self.instrument(Span::current())
-    }
-}
-
-pin_project! {
-    /// A [`Future`] that has been instrumented with a `tracing` [`Span`].
-    ///
-    /// This type is returned by the [`Instrument`] extension trait. See that
-    /// trait's documentation for details.
-    ///
-    /// [`Future`]: std::future::Future
-    /// [`Span`]: crate::Span
-    #[must_use = "futures do nothing unless you `.await` or poll them"]
-    pub struct Instrumented<T> {
-        #[pin]
-        inner: T,
-        span: Span,
-    }
-}
-
-// === impl Instrumented ===
-
-impl<T: Future> Future for Instrumented<T> {
-    type Output = T::Output;
-
-    fn poll(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
-        let this = self.project();
-        let _enter = this.span.enter();
-        trace_allocations(|| this.inner.poll(cx))
-    }
-}
-
-impl<T: Sized> Instrument for T {}
-
-impl<T> Instrumented<T> {
-    /// Borrows the `Span` that this type is instrumented by.
-    pub fn span(&self) -> &Span {
-        &self.span
-    }
-
-    /// Mutably borrows the `Span` that this type is instrumented by.
-    pub fn span_mut(&mut self) -> &mut Span {
-        &mut self.span
-    }
-
-    /// Borrows the wrapped type.
-    pub fn inner(&self) -> &T {
-        &self.inner
-    }
-
-    /// Mutably borrows the wrapped type.
-    pub fn inner_mut(&mut self) -> &mut T {
-        &mut self.inner
-    }
-
-    /// Get a pinned reference to the wrapped type.
-    pub fn inner_pin_ref(self: Pin<&Self>) -> Pin<&T> {
-        self.project_ref().inner
-    }
-
-    /// Get a pinned mutable reference to the wrapped type.
-    pub fn inner_pin_mut(self: Pin<&mut Self>) -> Pin<&mut T> {
-        self.project().inner
-    }
-
-    /// Consumes the `Instrumented`, returning the wrapped type.
-    ///
-    /// Note that this drops the span.
-    pub fn into_inner(self) -> T {
-        self.inner
-    }
-}
+use core::mem;
+use core::ops::DerefMut;
 
 use core::{
     alloc::{GlobalAlloc, Layout},
     cell::RefCell,
 };
 
-// used to prevent infinitely recursive tracing
-thread_local! { pub static TRACING_GUARD: RefCell<bool> = RefCell::new(false); }
+thread_local! {
+    /// Flag controlling whether to emit tracing events for allocations/deallocations on this thread.
+    pub static TRACE_ALLOCATOR: RefCell<bool> = RefCell::new(false);
+}
 
 /// An allocator that emits tracing events.
 ///
@@ -236,11 +50,10 @@ where
     unsafe fn alloc(&self, layout: Layout) -> *mut u8 {
         let ptr = self.allocator.alloc(layout);
         // trace the allocation
-        let _ = TRACING_GUARD.try_with(|guard| {
+        let _ = TRACE_ALLOCATOR.try_with(|guard| {
             // `guard.try_borrow_mut()` prevents us from tracing our traces
             if let Ok(mut trace_allocations) = guard.try_borrow_mut() {
-                if *trace_allocations {
-                    *trace_allocations = false;
+                if mem::replace(trace_allocations.deref_mut(), false) {
                     tracing::trace! {
                         addr = ptr as usize,
                         size = layout.size(),
@@ -257,11 +70,10 @@ where
     #[track_caller]
     unsafe fn dealloc(&self, ptr: *mut u8, layout: Layout) {
         self.allocator.dealloc(ptr, layout);
-        let _ = TRACING_GUARD.try_with(|guard| {
+        let _ = TRACE_ALLOCATOR.try_with(|guard| {
             // `guard.try_borrow_mut()` prevents us from tracing our traces
             if let Ok(mut trace_allocations) = guard.try_borrow_mut() {
-                if *trace_allocations {
-                    *trace_allocations = false;
+                if mem::replace(trace_allocations.deref_mut(), false) {
                     tracing::trace! {
                         addr = ptr as usize,
                         size = layout.size(),
@@ -277,13 +89,14 @@ where
 
 /// Trace allocations occurring within `f`.
 pub fn trace_allocations<F: FnOnce() -> R, R>(f: F) -> R {
-    TRACING_GUARD.with(|guard| {
+    TRACE_ALLOCATOR.with(|guard| {
+        let mut previous_state = false;
         if let Ok(mut trace_allocations) = guard.try_borrow_mut() {
-            *trace_allocations = true;
+            previous_state = mem::replace(&mut trace_allocations, true);
         }
         let res = f();
         if let Ok(mut trace_allocations) = guard.try_borrow_mut() {
-            *trace_allocations = false;
+            *trace_allocations = previous_state;
         }
         res
     })
@@ -291,13 +104,14 @@ pub fn trace_allocations<F: FnOnce() -> R, R>(f: F) -> R {
 
 /// Do not trace allocations occurring within `f`.
 pub fn ignore_allocations<F: FnOnce() -> R, R>(f: F) -> R {
-    TRACING_GUARD.with(|guard| {
+    TRACE_ALLOCATOR.with(|guard| {
+        let mut previous_state = true;
         if let Ok(mut trace_allocations) = guard.try_borrow_mut() {
-            *trace_allocations = false;
+            previous_state = mem::replace(&mut trace_allocations, false);
         }
         let res = f();
         if let Ok(mut trace_allocations) = guard.try_borrow_mut() {
-            *trace_allocations = true;
+            *trace_allocations = previous_state;
         }
         res
     })
