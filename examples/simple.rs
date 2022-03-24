@@ -1,38 +1,35 @@
-use tracing::{trace_span, Instrument};
 use tracing_subscriber::prelude::*;
 
 use std::alloc::System;
-use tracing_allocations::{ignore_allocations, trace_allocations, TracingAllocator};
+use tracing_allocations::TracingAllocator;
 
 #[global_allocator]
 static GLOBAL: TracingAllocator<System> = TracingAllocator::new(System);
 
-#[tokio::main]
-async fn main() {
-    tracing_subscriber::registry()
-        .with(tracing_subscriber::fmt::layer())
-        .init();
+fn main() {
+    let _guard = tracing_allocations::housekeeping();
 
-    trace_allocations(|| {
-        // TRACE foo: tracing_allocations: alloc addr=94253372165520 size=1
+    tracing_allocations::disable_in_scope(|| {
+        tracing_subscriber::registry()
+            .with(tracing_subscriber::filter::EnvFilter::new("trace"))
+            .with(tracing_subscriber::fmt::layer())
+            .init()
+    });
+
+    tracing::info_span!("foo").in_scope(|| {
         let a = Box::new([0u8; 1]);
 
-        let c = ignore_allocations(move || {
-            // no trace emitted
+        let c = tracing::info_span!("bar").in_scope(|| {
             drop(a);
 
-            trace_allocations(|| {
-                // TRACE foo: tracing_allocations: alloc addr=94253372165520 size=2
+            tracing::info_span!("baz").in_scope(|| {
                 let b = Box::new([0u8; 2]);
-                // TRACE foo: tracing_allocations: dealloc addr=94253372165520 size=2
                 drop(b);
             });
 
-            // no trace emitted
             Box::new([0u8; 3])
         });
 
-        // TRACE foo: tracing_allocations: dealloc addr=94253372165520 size=3
         drop(c);
     });
 }
